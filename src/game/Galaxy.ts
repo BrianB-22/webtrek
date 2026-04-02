@@ -120,6 +120,13 @@ export function generateGalaxy(difficulty: number): {
     placeRandom(quadrants[qy][qx].cells, CellType.Star)
   }
 
+  // Place planets — 20-30 scattered, 0-2 per quadrant
+  const totalPlanets = 20 + rand(11)
+  for (let i = 0; i < totalPlanets; i++) {
+    const qx = rand(GALAXY_SIZE), qy = rand(GALAXY_SIZE)
+    placeRandom(quadrants[qy][qx].cells, CellType.Planet)
+  }
+
   // Place player — prefer a quadrant with no enemies
   let startQx: number, startQy: number
   let attempts = 0

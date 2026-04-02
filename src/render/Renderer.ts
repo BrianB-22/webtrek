@@ -48,6 +48,7 @@ export class Renderer {
   private viewerModeIdx = 0
   private viewerLastChange = 0
   private anims: CombatAnim[] = []
+  private ghostEnemies: Array<{ sect: { x: number; y: number }; type: CellType; until: number }> = []
 
   // Layout geometry exposed for mouse hit-testing
   readonly CELL = CELL
@@ -69,24 +70,26 @@ export class Renderer {
     const sectorW = SECTOR_SIZE * CELL + 20
     const sectorH = SECTOR_SIZE * CELL + 20
     const statusW = 194
-    const mid = sectorH + 16
+    const topY = 20
+    const mid = topY + sectorH + 8
     const phaserH = 78, cmdH = 60, shipH = 86
     const rightPaneX = sectorW + 16 + statusW + 8
     const rightPaneW = W - rightPaneX - 4
-    const viewerW = 208, systemsW = 164
-    const logX = sectorW + 16
+    const botH = phaserH + 6 + cmdH + 6 + shipH
+    const sysH = 66
+    const msgH = Math.floor((botH - sysH - 12) / 2)
 
     this.L = {
-      sector:      { x: 8, y: 8 },
-      statusPanel: { x: sectorW + 16, y: 8, w: statusW, h: sectorH },
-      galaxy:      { x: rightPaneX, y: 8 },
+      sector:      { x: 8, y: topY },
+      statusPanel: { x: sectorW + 16, y: topY, w: statusW, h: sectorH },
+      galaxy:      { x: rightPaneX, y: topY },
       phasers:     { x: 8, y: mid, w: 168, h: phaserH },
       command:     { x: 8, y: mid + phaserH + 6, w: 168, h: cmdH },
       shipInfo:    { x: 8, y: mid + phaserH + 6 + cmdH + 6, w: 168, h: shipH },
-      viewer:      { x: 184, y: mid, w: viewerW, h: phaserH + 6 + cmdH + 6 + shipH },
-      systems:     { x: 184 + viewerW + 4, y: mid, w: systemsW, h: phaserH + 6 + cmdH + 6 + shipH },
-      messages:    { x: logX + statusW + 8, y: mid, w: rightPaneW, h: Math.floor((phaserH + 6 + cmdH + 6 + shipH) / 2) - 3 },
-      damage:      { x: logX + statusW + 8, y: mid + Math.floor((phaserH + 6 + cmdH + 6 + shipH) / 2) + 3, w: rightPaneW, h: Math.floor((phaserH + 6 + cmdH + 6 + shipH) / 2) - 3 },
+      viewer:      { x: 184, y: mid, w: rightPaneX - 188, h: botH },
+      systems:     { x: rightPaneX, y: mid, w: rightPaneW, h: sysH },
+      messages:    { x: rightPaneX, y: mid + sysH + 6, w: rightPaneW, h: msgH },
+      damage:      { x: rightPaneX, y: mid + sysH + 6 + msgH + 6, w: rightPaneW, h: msgH },
     }
   }
 
@@ -115,6 +118,11 @@ export class Renderer {
   queueLaserAnim(src: SectPos, dsts: SectPos[]): void {
     if (dsts.length === 0) return
     this.anims.push({ type: 'laser', start: performance.now(), duration: 450, src, dsts })
+  }
+
+  // Keep enemy sprite visible during torpedo flight after game state already removed it
+  addGhostEnemy(sect: { x: number; y: number }, type: CellType, durationMs: number): void {
+    this.ghostEnemies.push({ sect, type, until: performance.now() + durationMs })
   }
 
   // Player torpedo moving to target sector
@@ -194,6 +202,12 @@ export class Renderer {
           drawSprite(ctx, type, ox + 1 + col * CELL, oy + 1 + row * CELL)
         }
       }
+    }
+
+    // Draw ghost enemies (visible during torpedo flight after game state removed them)
+    this.ghostEnemies = this.ghostEnemies.filter(g => now < g.until)
+    for (const ghost of this.ghostEnemies) {
+      drawSprite(ctx, ghost.type, ox + 1 + ghost.sect.x * CELL, oy + 1 + ghost.sect.y * CELL)
     }
 
     this.drawCombatAnims(ox, oy, now)
@@ -313,7 +327,19 @@ export class Renderer {
     const { x, y, w, h } = L.statusPanel
     this.panel(x, y, w, h, C.panelBg)
 
-    const { player, date, alert, totalEnemies } = state
+    const { player, date, totalEnemies } = state
+
+    // Compute 3-level alert
+    const hasEnemies = state.quadrant.enemies.length > 0
+    const shieldsDown = player.shields === 0
+    const criticalDamage = Object.values(player.systems).some(v => v < 30)
+    const alertLevel: 'green' | 'yellow' | 'red' =
+      !hasEnemies ? 'green' :
+      (shieldsDown || criticalDamage) ? 'red' : 'yellow'
+
+    const alertBgMap = { green: C.statusGreen, yellow: '#666600', red: C.alertBg }
+    const alertLabelMap = { green: 'Status', yellow: '>>CAUTION<<', red: '>>RED ALERT<<' }
+    const alertSubMap = { green: 'Green', yellow: 'Yellow', red: 'Red' }
 
     // Date box
     ctx.fillStyle = C.panelBg
@@ -325,17 +351,27 @@ export class Renderer {
     this.value(x + 10, y + 28, date.toFixed(1), C.cyan)
 
     // Status box
-    const alertBg = alert ? C.alertBg : C.statusGreen
-    ctx.fillStyle = alertBg
+    ctx.fillStyle = alertBgMap[alertLevel]
     ctx.fillRect(x + 92, y + 4, w - 96, 30)
     ctx.strokeStyle = C.hudBorder
     ctx.strokeRect(x + 92, y + 4, w - 96, 30)
     ctx.fillStyle = C.white
     ctx.font = '18px VT323'
     ctx.textAlign = 'center'
-    ctx.fillText(alert ? '>>ALERT<<' : 'Status', x + 92 + (w - 96) / 2, y + 16)
-    ctx.fillText(alert ? '' : 'Green', x + 92 + (w - 96) / 2, y + 28)
+    ctx.fillText(alertLabelMap[alertLevel], x + 92 + (w - 96) / 2, y + 16)
+    ctx.fillText(alertSubMap[alertLevel], x + 92 + (w - 96) / 2, y + 28)
     ctx.textAlign = 'left'
+
+    // Show orbit indicator if orbiting
+    if (state.phase === GamePhase.Orbiting) {
+      ctx.fillStyle = '#004400'
+      ctx.fillRect(x + 4, y + 38, w - 8, 14)
+      ctx.fillStyle = C.green
+      ctx.font = '13px VT323'
+      ctx.textAlign = 'center'
+      ctx.fillText('IN ORBIT', x + w / 2, y + 49)
+      ctx.textAlign = 'left'
+    }
 
     // Circular dials — raised slightly so label clears the warp box below
     const dialY = y + 64
@@ -703,22 +739,35 @@ export class Renderer {
   // ── Systems Status ────────────────────────────────────────────────────────
 
   private drawSystems(state: GameState): void {
-    const { L } = this
+    const { ctx, L } = this
     const { x, y, w, h } = L.systems
     this.panel(x, y, w, h, C.panelBg)
     this.label(x + 4, y + 11, 'SYSTEMS STATUS', C.white)
 
     const systems = Object.entries(state.player.systems)
+    const half = Math.ceil(systems.length / 2)
+    const colW = Math.floor((w - 8) / 2)
+    const barW = Math.floor(colW * 0.35)
+    const nameW = colW - barW - 4
+
     systems.forEach(([name, pct], i) => {
-      const sy = y + 21 + i * 10
-      const displayName = name.length > 15 ? name.slice(0, 14) + '.' : name
-      this.label(x + 4, sy, displayName, C.green)
-      const bx = x + 108, bw = w - 112
-      this.ctx.fillStyle = C.darkGray
-      this.ctx.fillRect(bx, sy - 8, bw, 8)
-      const color = pct > 75 ? C.green : pct > 40 ? C.yellow : C.red
-      this.ctx.fillStyle = color
-      this.ctx.fillRect(bx, sy - 8, Math.floor(bw * pct / 100), 8)
+      const col = i < half ? 0 : 1
+      const row = i < half ? i : i - half
+      const cx = x + 4 + col * colW
+      const sy = y + 20 + row * 7
+
+      // Shorten name to fit nameW at 12px font (~6px/char → ~nameW/6 chars)
+      const maxChars = Math.floor(nameW / 6)
+      const short = name.length > maxChars ? name.slice(0, maxChars - 1) + '.' : name
+      ctx.fillStyle = pct > 75 ? C.green : pct > 40 ? C.yellow : C.red
+      ctx.font = '12px VT323'
+      ctx.fillText(short, cx, sy)
+
+      const bx = cx + nameW + 2
+      ctx.fillStyle = C.darkGray
+      ctx.fillRect(bx, sy - 6, barW, 5)
+      ctx.fillStyle = pct > 75 ? C.green : pct > 40 ? C.yellow : C.red
+      ctx.fillRect(bx, sy - 6, Math.floor(barW * pct / 100), 5)
     })
   }
 

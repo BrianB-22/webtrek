@@ -98,6 +98,8 @@ export interface GameState {
   log: LogEntry[]
   phase: GamePhase
   difficulty: number  // 1-5
+  selfDestructPassword: string
+  commanderName: string
 }
 
 export interface LogEntry {
@@ -111,6 +113,7 @@ export enum GamePhase {
   Briefing,
   Playing,
   Docked,
+  Orbiting,
   GameOver,
   Victory,
 }

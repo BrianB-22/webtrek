@@ -116,23 +116,80 @@ export function parseCommand(input: string, game: Game): string {
     case 'repair': case 'r': return game.cmdRepairStatus()
     case 'info':   case 'i': return game.cmdInfo()
 
+    // ── Fix (repair systems) ──────────────────────────────────────────────
+    case 'fix':
+    case 'f': {
+      const sysNum = parts[1] ? parseInt(parts[1]) : undefined
+      const stardates = parts[2] ? parseFloat(parts[2]) : undefined
+      if (parts[1] && isNaN(sysNum!)) return 'Usage: fix  or  fix <system#>  or  fix <system#> <stardates>'
+      return game.cmdFix(sysNum, stardates)
+    }
+
+    // ── Orbit / Land / Use ────────────────────────────────────────────────
+    case 'orbit':
+    case 'o':     return game.cmdOrbit()
+    case 'land':  return game.cmdLand()
+    case 'use':   return 'No items available to use.'
+
+    // ── Hail ──────────────────────────────────────────────────────────────
+    case 'hail':  return game.cmdHail()
+
+    // ── Self-Destruct ─────────────────────────────────────────────────────
+    case 'self': {
+      const pw = parts.slice(1).join(' ')
+      if (!pw) return 'Usage: self <password>'
+      return game.cmdSelf(pw)
+    }
+
+    // ── Death Ray ─────────────────────────────────────────────────────────
+    case 'ray': return game.cmdDeathRay()
+
+    // ── Message log ───────────────────────────────────────────────────────
+    case 'msgs': return game.cmdMsgs()
+
+    // ── Ack message ───────────────────────────────────────────────────────
+    case 'ack':
+    case 'a':
+      return 'Message acknowledged.'
+
+    // ── Quit ──────────────────────────────────────────────────────────────
+    case 'quit':
+    case 'q':     return game.cmdQuit()
+
     // ── Help ──────────────────────────────────────────────────────────────
     case 'help':
     case 'h':
     case '?':
       return [
-        'move <qrow> <qcol> <srow> <scol>  warp to quadrant+sector',
-        'move <srow> <scol>                impulse within quadrant',
-        'm6235                              compact form',
-        'phasers <e1> [e2] [e3]            fire phasers at enemies',
-        'torpedo <row> <col> [row col...]   fire torpedo at sector(s)',
-        'shup / shdn / max                 shields up/down/max',
-        'energy [amount]                   show or transfer energy',
-        'warp <speed>                      set warp factor',
-        'srs / lrs                         short/long range scan',
-        'dock / undock                     dock at/leave base',
-        'repair                            repair status',
-        'info                              enemy ship info',
+        'NAVIGATION',
+        '  move <qrow> <qcol> <srow> <scol>  warp to quadrant+sector',
+        '  move <srow> <scol>                impulse within quadrant',
+        '  m6235                             compact form',
+        '  orbit / o                         enter orbit around nearby planet',
+        '  land                              beam party to planet surface',
+        '  undock / u                        leave base or orbit',
+        'WEAPONS',
+        '  phasers <e1> [e2] [e3]           fire phasers at enemies',
+        '  torpedo <row> <col> [row col...]  fire torpedo at sector',
+        '  ray                              fire Death Ray (800 energy, high risk)',
+        'DEFENSE',
+        '  shup / shdn / max                shields up/down/max',
+        '  energy [amount]                  show or transfer energy to shields',
+        '  warp <speed>                     set warp factor',
+        'SHIP SYSTEMS',
+        '  fix                              list systems for repair',
+        '  fix <n> [stardates]              repair system n',
+        '  repair                           show repair status',
+        'INFORMATION',
+        '  srs / lrs                        short/long range scan',
+        '  info                             enemy ship info',
+        '  msgs                             replay message log',
+        'BASE OPS',
+        '  dock / d                         dock at adjacent base',
+        '  hail                             hail base in quadrant',
+        'OTHER',
+        '  self <password>                  self-destruct',
+        '  quit / q                         return to title screen',
       ].join('\n')
 
     default:

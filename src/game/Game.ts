@@ -40,7 +40,7 @@ export class Game {
     this.state = this.newGame(difficulty)
   }
 
-  newGame(difficulty = 3): GameState {
+  newGame(difficulty = 3, commanderName = 'Commander', selfDestructPassword = 'DESTRUCT'): GameState {
     const { galaxy, quadrants, startPos } = generateGalaxy(difficulty)
     this._quadrants = quadrants
     const quadrant = quadrants[startPos.quad.y][startPos.quad.x]
@@ -56,6 +56,8 @@ export class Game {
       log: [{ date: STARDATE_START, text: 'Starfleet orders: eliminate all Klingon forces.' }],
       phase: GamePhase.Playing,
       difficulty,
+      selfDestructPassword,
+      commanderName,
     }
   }
 
@@ -87,6 +89,21 @@ export class Game {
       player.lifeSupportDays = 2
     }
 
+    // Progressive system failure: each damaged system has a chance to degrade further
+    for (const sys of Object.values(ShipSystem)) {
+      const pct = player.systems[sys]
+      if (pct > 0 && pct < 100) {
+        // ~5% chance per stardate per damaged system to degrade 1-3%
+        if (Math.random() < 0.05 * days) {
+          const extra = 1 + Math.floor(Math.random() * 3)
+          player.systems[sys] = Math.max(0, pct - extra)
+          if (player.systems[sys] < pct) {
+            this.addLog(`DAMAGE REPORT: ${sys} degraded to ${player.systems[sys]}%.`)
+          }
+        }
+      }
+    }
+
     // Update phaser efficiency (drops with heat)
     player.phaserEff = Math.min(
       player.systems[ShipSystem.Phasers],
@@ -101,6 +118,11 @@ export class Game {
   cmdMove(qx: number, qy: number, sx: number, sy: number): string {
     const { position, player } = this.state
     const crossingQuadrant = qx !== position.quad.x || qy !== position.quad.y
+
+    // Exit orbit if currently orbiting
+    if (this.state.phase === GamePhase.Orbiting) {
+      this.state.phase = GamePhase.Playing
+    }
 
     if (crossingQuadrant) {
       if (player.systems[ShipSystem.WarpEngines] < 10) return 'Warp engines offline.'
@@ -370,9 +392,15 @@ export class Game {
   }
 
   cmdUndock(): string {
-    if (this.state.phase !== GamePhase.Docked) return 'Not docked.'
-    this.state.phase = GamePhase.Playing
-    return 'Undocked from base.'
+    if (this.state.phase === GamePhase.Docked) {
+      this.state.phase = GamePhase.Playing
+      return 'Undocked from base.'
+    }
+    if (this.state.phase === GamePhase.Orbiting) {
+      this.state.phase = GamePhase.Playing
+      return 'Left orbit.'
+    }
+    return 'Not docked or in orbit.'
   }
 
   // ── Energy Management ─────────────────────────────────────────────────────
@@ -416,6 +444,215 @@ export class Game {
       const typeName = this.enemyTypeName(e.type)
       return `${i + 1}. ${typeName} at ${e.sect.x + 1},${e.sect.y + 1}  dist:${dist}  shlds:~${Math.round(e.energy / 4)}`
     }).join('\n')
+  }
+
+  // ── Fix (repair) ──────────────────────────────────────────────────────────
+
+  // fix            → list all systems with numbers
+  // fix <n>        → repair system n fully (time calculated automatically)
+  // fix <n> <t>    → repair system n for t stardates
+  cmdFix(systemNum?: number, stardates?: number): string {
+    const systems = Object.values(ShipSystem)
+
+    if (systemNum === undefined) {
+      // List all systems numbered
+      const docked = this.state.phase === GamePhase.Docked
+      const lines = ['ENGINEERING REPORT — Select system to repair:']
+      lines.push(`  (Docked: 0.025 std/%; Undocked: 0.05 std/%)`)
+      systems.forEach((sys, i) => {
+        const pct = this.state.player.systems[sys]
+        const dmg = 100 - pct
+        const timeNeeded = dmg * (docked ? 0.025 : 0.05)
+        const status = pct === 100 ? 'OK' : `${pct}%  (${timeNeeded.toFixed(1)} std to repair)`
+        lines.push(`  ${String(i + 1).padStart(2)}. ${sys.padEnd(18)} ${status}`)
+      })
+      lines.push('Usage: fix <system#>  or  fix <system#> <stardates>')
+      return lines.join('\n')
+    }
+
+    const idx = systemNum - 1
+    if (idx < 0 || idx >= systems.length) return `Invalid system number. Use 1-${systems.length}.`
+
+    const sys = systems[idx]
+    const pct = this.state.player.systems[sys]
+    if (pct >= 100) return `${sys} is already at full integrity.`
+
+    const dmg = 100 - pct
+    const docked = this.state.phase === GamePhase.Docked
+    const ratePerDay = docked ? 0.025 : 0.05  // stardates per % damage
+
+    let days: number
+    if (stardates !== undefined && stardates > 0) {
+      days = stardates
+    } else {
+      // Full repair
+      days = dmg * ratePerDay
+    }
+
+    const repairPct = Math.min(dmg, Math.floor(days / ratePerDay))
+    this.state.player.systems[sys] = Math.min(100, pct + repairPct)
+    this.advanceTime(days)
+
+    const msg = `${sys} repaired to ${this.state.player.systems[sys]}% over ${days.toFixed(1)} stardates.`
+    this.addLog(`ENGINEERING: ${msg}`)
+    if (!docked) this.enemyAttack()
+    return msg
+  }
+
+  // ── Orbit ─────────────────────────────────────────────────────────────────
+
+  cmdOrbit(): string {
+    if (this.state.phase === GamePhase.Docked) return 'Undock first.'
+    if (this.state.phase === GamePhase.Orbiting) return 'Already in orbit.'
+
+    const { position, quadrant } = this.state
+    const { sect } = position
+
+    // Find nearest planet within 1.5 sectors (orthogonally or diagonally adjacent)
+    let nearest: { x: number; y: number } | null = null
+    let nearestDist = Infinity
+    for (let row = 0; row < SECTOR_SIZE; row++) {
+      for (let col = 0; col < SECTOR_SIZE; col++) {
+        if (quadrant.cells[row][col] === CellType.Planet) {
+          const dist = Math.sqrt(Math.pow(col - sect.x, 2) + Math.pow(row - sect.y, 2))
+          if (dist <= 1.5 && dist < nearestDist) {
+            nearest = { x: col, y: row }
+            nearestDist = dist
+          }
+        }
+      }
+    }
+
+    if (!nearest) return 'No planet within range. Move to within 1 sector of a planet.'
+
+    this.state.phase = GamePhase.Orbiting
+    const msg = `Entered standard orbit around planet at ${nearest.x + 1},${nearest.y + 1}.`
+    this.addLog(`NAVIGATION: ${msg}`)
+    return msg
+  }
+
+  // ── Land ──────────────────────────────────────────────────────────────────
+
+  cmdLand(): string {
+    if (this.state.phase !== GamePhase.Orbiting) return 'Must be in orbit first. Use: orbit'
+
+    const { player } = this.state
+    const transporterOk = player.systems[ShipSystem.Transporter] >= 50
+    const shuttleOk     = player.systems[ShipSystem.Shuttlecraft] >= 50
+
+    if (!transporterOk && !shuttleOk) {
+      return 'Transporter and Shuttlecraft both offline. Cannot land.'
+    }
+    const vehicle = transporterOk ? 'Transporter' : 'Shuttlecraft'
+
+    // Random surface event
+    const roll = Math.random()
+    let result: string
+    if (roll < 0.15) {
+      // Find supplies: restore some torpedoes or energy
+      const gain = 100 + Math.floor(Math.random() * 400)
+      player.energy = Math.min(player.maxEnergy, player.energy + gain)
+      result = `Landing party found supply cache. +${gain} energy units.`
+    } else if (roll < 0.25) {
+      // Minor hazard: small damage
+      this.damageSystem()
+      result = 'Landing party encountered hazardous conditions. Minor damage reported.'
+    } else if (roll < 0.35) {
+      // Life support components
+      player.systems[ShipSystem.LifeSupport] = Math.min(100, player.systems[ShipSystem.LifeSupport] + 20)
+      result = 'Landing party recovered life support components.'
+    } else {
+      result = 'Survey complete. No significant findings.'
+    }
+
+    this.advanceTime(0.1)
+    const msg = `${vehicle} beamed party down. ${result}`
+    this.addLog(`COMMUNICATIONS: ${msg}`)
+    return msg
+  }
+
+  // ── Hail ──────────────────────────────────────────────────────────────────
+
+  cmdHail(): string {
+    const { quadrant, phase } = this.state
+    if (quadrant.baseType === BaseType.None) return 'No base in this quadrant to hail.'
+
+    const baseNames: Record<number, string> = {
+      [BaseType.StarBase]: 'Starbase',
+      [BaseType.Research]: 'Research Station',
+      [BaseType.Supply]:   'Supply Depot',
+    }
+    const baseName = baseNames[quadrant.baseType] ?? 'Base'
+
+    const docked = phase === GamePhase.Docked
+    const msgs = docked ? [
+      `${baseName} to ship: Welcome. All facilities at your disposal.`,
+      `${baseName} Control: Resupply operations complete.`,
+      `${baseName} Ops: Safe travels, Commander.`,
+    ] : [
+      `${baseName} to ship: We read you. Come in for docking.`,
+      `${baseName} Control: Approach on bearing 227. Docking bay open.`,
+      `${baseName} Ops: ${this.state.totalEnemies} enemy vessels still active in sector.`,
+      `${baseName}: We show ${this.state.quadrant.enemies.length} hostiles in your quadrant. Good luck.`,
+    ]
+
+    const line = msgs[Math.floor(Math.random() * msgs.length)]
+    this.addLog(`COMMUNICATIONS: ${line}`)
+    return line
+  }
+
+  // ── Self-Destruct ──────────────────────────────────────────────────────────
+
+  cmdSelf(password: string): string {
+    if (password !== this.state.selfDestructPassword) {
+      return 'DESTRUCT SEQUENCE ABORTED — incorrect password.'
+    }
+    this.state.phase = GamePhase.GameOver
+    this.addLog('SELF-DESTRUCT sequence initiated. Ship destroyed.')
+    return 'DESTRUCT SEQUENCE INITIATED.\nExplosion in 30 seconds.\nAll hands abandon ship.\n*** SHIP DESTROYED ***'
+  }
+
+  // ── Death Ray ─────────────────────────────────────────────────────────────
+
+  cmdDeathRay(): string {
+    const { player, quadrant } = this.state
+    const ENERGY_COST = 800
+
+    if (player.energy < ENERGY_COST) return `Insufficient energy. Death Ray requires ${ENERGY_COST} units.`
+    if (quadrant.enemies.length === 0) return 'No enemy vessels in this quadrant.'
+
+    player.energy -= ENERGY_COST
+
+    // Destroy all enemies in quadrant
+    const count = quadrant.enemies.length
+    const toDestroy = [...quadrant.enemies]
+    for (const e of toDestroy) this.destroyEnemy(e.sect)
+
+    // Overload damages 2 random systems
+    this.damageSystem()
+    this.damageSystem()
+
+    const msg = `DEATH RAY fired! ${count} enemy vessel${count > 1 ? 's' : ''} obliterated. Overload damaged 2 ship systems.`
+    this.addLog(`WEAPONS: ${msg}`)
+    this.advanceTime(0.05)
+    this.checkVictory()
+    return msg
+  }
+
+  // ── Quit ──────────────────────────────────────────────────────────────────
+
+  cmdQuit(): string {
+    this.state.phase = GamePhase.Title
+    return 'Returning to title screen...'
+  }
+
+  // ── Message Log ───────────────────────────────────────────────────────────
+
+  cmdMsgs(): string {
+    if (this.state.log.length === 0) return 'No messages in log.'
+    return this.state.log.slice(0, 20)
+      .map(e => `[${e.date.toFixed(1)}] ${e.text}`)
+      .join('\n')
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────────

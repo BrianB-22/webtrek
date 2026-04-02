@@ -1,5 +1,5 @@
 import { Game } from './game/Game'
-import { GamePhase } from './game/types'
+import { GamePhase, CellType } from './game/types'
 import { Renderer } from './render/Renderer'
 import { parseCommand } from './input/CommandParser'
 import { defaultIntroState, IntroState, RANKS } from './render/TitleScreen'
@@ -49,7 +49,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     return
   }
 
-  if (phase === GamePhase.Playing || phase === GamePhase.Docked) {
+  if (phase === GamePhase.Playing || phase === GamePhase.Docked || phase === GamePhase.Orbiting) {
     handleGameKey(e)
   }
 })
@@ -120,7 +120,11 @@ function handleBriefingKey(e: KeyboardEvent): void {
 }
 
 function startGame(): void {
-  const newState = game.newGame(intro.level || 3)
+  const newState = game.newGame(
+    intro.level || 3,
+    intro.commanderName || 'Commander',
+    intro.selfDestructPassword || 'DESTRUCT',
+  )
   Object.assign(game.state, newState)
   const rank = RANKS[intro.level] ?? 'Commander'
   game.addLog(`Welcome aboard, ${rank} ${intro.commanderName}.`)
@@ -156,9 +160,20 @@ function maybeTriggerCombatAnim(raw: string): void {
 function handleGameKey(e: KeyboardEvent): void {
   if (e.key === 'Enter') {
     if (commandBuffer.trim()) {
+      const enemiesBefore = game.state.quadrant.enemies.map(e => ({ sect: { ...e.sect }, type: e.type }))
       maybeTriggerCombatAnim(commandBuffer)
       const result = parseCommand(commandBuffer, game)
       game.addLog(result)
+      // Add ghost sprites for enemies destroyed by torpedo so they're visible during animation
+      const parts = commandBuffer.trim().toLowerCase().split(/\s+/)
+      if (parts[0] === 't' || parts[0] === 'torpedo') {
+        const afterKeys = new Set(game.state.quadrant.enemies.map(e => `${e.sect.x},${e.sect.y}`))
+        for (const e of enemiesBefore) {
+          if (!afterKeys.has(`${e.sect.x},${e.sect.y}`)) {
+            renderer.addGhostEnemy(e.sect, e.type, 700)
+          }
+        }
+      }
     }
     commandBuffer = ''
   } else if (e.key === 'Backspace') {
@@ -172,7 +187,7 @@ function handleGameKey(e: KeyboardEvent): void {
 
 canvas.addEventListener('click', (e: MouseEvent) => {
   const phase = game.state.phase
-  if (phase !== GamePhase.Playing && phase !== GamePhase.Docked) return
+  if (phase !== GamePhase.Playing && phase !== GamePhase.Docked && phase !== GamePhase.Orbiting) return
 
   const { x: mx, y: my } = renderer.toLogical(e.clientX, e.clientY)
 
@@ -217,7 +232,7 @@ canvas.addEventListener('click', (e: MouseEvent) => {
 canvas.addEventListener('contextmenu', (e: MouseEvent) => {
   e.preventDefault()
   const phase = game.state.phase
-  if (phase !== GamePhase.Playing && phase !== GamePhase.Docked) return
+  if (phase !== GamePhase.Playing && phase !== GamePhase.Docked && phase !== GamePhase.Orbiting) return
 
   const { x: mx, y: my } = renderer.toLogical(e.clientX, e.clientY)
 
@@ -228,13 +243,21 @@ canvas.addEventListener('contextmenu', (e: MouseEvent) => {
 
   if (secCol >= 0 && secCol < SECTOR_SIZE && secRow >= 0 && secRow < SECTOR_SIZE) {
     const playerSect = { ...game.state.position.sect }
-    const enemySects = game.state.quadrant.enemies.map(e => ({ ...e.sect }))
+    const enemiesBefore = game.state.quadrant.enemies.map(e => ({ sect: { ...e.sect }, type: e.type as CellType }))
+    const enemySects = enemiesBefore.map(e => e.sect)
     const cmd = `torpedo ${secRow + 1} ${secCol + 1}`
     renderer.queueTorpedoAnim(playerSect, { x: secCol, y: secRow })
     renderer.queueEnemyFireAnim(enemySects, playerSect)
     commandBuffer = cmd
     const result = parseCommand(cmd, game)
     game.addLog(result)
+    // Ghost sprites for destroyed enemies during torpedo flight
+    const afterKeys = new Set(game.state.quadrant.enemies.map(e => `${e.sect.x},${e.sect.y}`))
+    for (const e of enemiesBefore) {
+      if (!afterKeys.has(`${e.sect.x},${e.sect.y}`)) {
+        renderer.addGhostEnemy(e.sect, e.type, 700)
+      }
+    }
     commandBuffer = ''
   }
 })
