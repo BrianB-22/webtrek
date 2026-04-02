@@ -397,58 +397,101 @@ export class Renderer {
 
   private drawDial(cx: number, cy: number, r: number, val: number, max: number, label: string): void {
     const { ctx } = this
-    const start = Math.PI * 0.75
-    const end   = Math.PI * 2.25
-    const sweep = end - start
     const pct = Math.max(0, Math.min(1, val / max))
-    const valAngle = start + pct * sweep
-    const arcColor = pct > 0.6 ? C.green : pct > 0.3 ? C.yellow : C.red
 
-    // Track background (270° arc, gap at bottom)
+    // Oval background (slightly wider than tall, like original)
+    const rw = r + 4, rh = r - 2
+    ctx.save()
     ctx.beginPath()
-    ctx.arc(cx, cy, r, start, end)
-    ctx.strokeStyle = '#222244'
-    ctx.lineWidth = 8
+    ctx.ellipse(cx, cy, rw, rh, 0, 0, Math.PI * 2)
+    ctx.fillStyle = '#888899'
+    ctx.fill()
+    ctx.strokeStyle = '#aaaacc'
+    ctx.lineWidth = 1
     ctx.stroke()
 
-    // Value arc (color-coded)
-    if (pct > 0) {
-      ctx.beginPath()
-      ctx.arc(cx, cy, r, start, valAngle)
-      ctx.strokeStyle = arcColor
-      ctx.lineWidth = 8
-      ctx.stroke()
-    }
+    // Fan arc: spans from ~210° to ~330° (pointing upward, 120° total)
+    // 0° = right, going counterclockwise for the fan opening upward
+    // Arc starts at lower-left (210°) sweeps to lower-right (330°) via top
+    // Fan arc: from 210° counterclockwise through top to 330°
+    // Original goes LEFT (low/red) to RIGHT (high/green) through the TOP.
+    // We draw bands going counterclockwise from 210 through top to 330
+    // Remap: counterclockwise from 210° means going: 210 → 180 → 90 → 0/360 → 330
+    // The full span is 360 - (330-210) = 360 - 120 = 240°
+    const fanStart  = Math.PI * (210/180)   // canvas: 210° clockwise from right
+    const fanEnd    = Math.PI * (330/180)   // canvas: 330° clockwise from right
+    const fanSpanCCW = Math.PI * 2 - (fanEnd - fanStart) // 240° going counterclockwise
 
-    // Tick marks — just outside the arc so they're always visible
-    ctx.strokeStyle = '#555577'
-    ctx.lineWidth = 1
-    for (let i = 0; i <= 8; i++) {
-      const a = start + (i / 8) * sweep
-      const inner = r + 3, outer = r + 8
-      ctx.beginPath()
-      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner)
-      ctx.lineTo(cx + Math.cos(a) * outer, cy + Math.sin(a) * outer)
-      ctx.stroke()
-    }
+    // Draw 4 color bands evenly across the 240° sweep (counterclockwise)
+    const bandColors = ['#CC2200', '#CC6600', '#998800', '#22AA00']
+    const bandCount  = bandColors.length
+    const innerR = rw * 0.3
+    const outerR = rw * 0.85
 
-    // Center fill
+    ctx.save()
     ctx.beginPath()
-    ctx.arc(cx, cy, r - 9, 0, Math.PI * 2)
-    ctx.fillStyle = '#0a0a22'
+    ctx.ellipse(cx, cy, rw - 1, rh - 1, 0, 0, Math.PI * 2)
+    ctx.clip()
+
+    for (let i = 0; i < bandCount; i++) {
+      const a1 = fanStart - (i / bandCount) * fanSpanCCW
+      const a2 = fanStart - ((i + 1) / bandCount) * fanSpanCCW
+      ctx.beginPath()
+      ctx.moveTo(cx + Math.cos(a1) * innerR, cy + Math.sin(a1) * innerR)
+      ctx.arc(cx, cy, outerR, a1, a2, true)
+      ctx.arc(cx, cy, innerR, a2, a1, false)
+      ctx.closePath()
+      ctx.fillStyle = bandColors[i]
+      ctx.fill()
+    }
+    ctx.restore()
+
+    // Inner gray fill (hub area)
+    ctx.beginPath()
+    ctx.arc(cx, cy, innerR - 1, 0, Math.PI * 2)
+    ctx.fillStyle = '#666677'
     ctx.fill()
 
-    // Value text inside center
-    const displayVal = val >= 1000 ? `${(val / 1000).toFixed(1)}k` : Math.round(val).toString()
-    ctx.fillStyle = pct > 0 ? arcColor : '#555577'
-    ctx.font = '13px VT323'
-    ctx.textAlign = 'center'
-    ctx.fillText(displayVal, cx, cy + 4)
+    // Needle — thin triangle from pivot pointing outward
+    const needleAngle = fanStart - pct * fanSpanCCW
+    const needleLen = outerR - 2
+    ctx.beginPath()
+    ctx.moveTo(
+      cx + Math.cos(needleAngle) * needleLen,
+      cy + Math.sin(needleAngle) * needleLen
+    )
+    ctx.lineTo(
+      cx + Math.cos(needleAngle + Math.PI / 2) * (innerR * 0.6),
+      cy + Math.sin(needleAngle + Math.PI / 2) * (innerR * 0.6)
+    )
+    ctx.lineTo(
+      cx + Math.cos(needleAngle - Math.PI / 2) * (innerR * 0.6),
+      cy + Math.sin(needleAngle - Math.PI / 2) * (innerR * 0.6)
+    )
+    ctx.closePath()
+    ctx.fillStyle = pct > 0.5 ? '#8888ff' : '#ffaaaa'
+    ctx.fill()
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 0.5
+    ctx.stroke()
 
-    // Label below dial
+    // Pivot dot
+    ctx.beginPath()
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2)
+    ctx.fillStyle = '#3355ff'
+    ctx.fill()
+
+    // Value text below dial center
+    const displayVal = val >= 1000 ? `${(val / 1000).toFixed(1)}k` : Math.round(val).toString()
+    ctx.fillStyle = C.white
+    ctx.font = '12px VT323'
+    ctx.textAlign = 'center'
+    ctx.fillText(displayVal, cx, cy + rh + 2)
+
+    // Label below
     ctx.fillStyle = C.white
     ctx.font = '13px VT323'
-    ctx.fillText(label, cx, cy + r + 10)
+    ctx.fillText(label, cx, cy + rh + 12)
     ctx.textAlign = 'left'
   }
 
