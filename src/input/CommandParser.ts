@@ -135,11 +135,13 @@ export function parseCommand(input: string, game: Game): string {
     case 'hail':  return game.cmdHail()
 
     // ── Self-Destruct ─────────────────────────────────────────────────────
-    case 'self': {
-      const pw = parts.slice(1).join(' ')
-      if (!pw) return 'Usage: self <password>'
-      return game.cmdSelf(pw)
-    }
+    case 'self':
+      return game.cmdSelf(false)
+
+    // ── Self-Destruct confirmation ────────────────────────────────────────
+    case 'y':
+      if (game.state.pendingSelfDestruct) return game.cmdSelf(true)
+      return `Unknown command: y. Type help for list.`
 
     // ── Death Ray ─────────────────────────────────────────────────────────
     case 'ray': return game.cmdDeathRay()
@@ -188,7 +190,7 @@ export function parseCommand(input: string, game: Game): string {
         '  dock / d                         dock at adjacent base',
         '  hail                             hail base in quadrant',
         'OTHER',
-        '  self <password>                  self-destruct',
+        '  self                             self-destruct (Y to confirm)',
         '  quit / q                         return to title screen',
       ].join('\n')
 

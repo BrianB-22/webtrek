@@ -71,8 +71,8 @@ export class Game {
     this.state.date += days
     const { player } = this.state
 
-    // M/A-M energy regeneration
-    const regen = MAM_REGEN_PER_DAY * (player.systems[ShipSystem.MAMConverter] / 100) * days
+    // EnergyConverter regeneration
+    const regen = MAM_REGEN_PER_DAY * (player.systems[ShipSystem.EnergyConverter] / 100) * days
     player.energy = Math.min(player.maxEnergy, player.energy + regen)
 
     // Phaser temp cools down
@@ -104,9 +104,9 @@ export class Game {
       }
     }
 
-    // Update phaser efficiency (drops with heat)
+    // Update laser efficiency (drops with heat)
     player.phaserEff = Math.min(
-      player.systems[ShipSystem.Phasers],
+      player.systems[ShipSystem.Lasers],
       100 - Math.floor(player.phaserTemp / 15)
     )
   }
@@ -129,7 +129,7 @@ export class Game {
       const maxWarp = 1 + 0.09 * player.systems[ShipSystem.WarpEngines]
       if (player.warp > maxWarp) return `Warp limited to ${maxWarp.toFixed(1)} by engine damage.`
     } else {
-      if (player.systems[ShipSystem.ImpulseEngines] < 50) return 'Impulse engines offline.'
+      if (player.systems[ShipSystem.ImpulseEngine] < 50) return 'Impulse engines offline.'
     }
 
     // Energy cost
@@ -187,7 +187,7 @@ export class Game {
   // energyPerTarget: array of energy amounts, one per enemy in quadrant (in order)
   cmdPhasers(energyPerTarget: number[]): string {
     const { player } = this.state
-    if (player.systems[ShipSystem.Phasers] < 10) return 'Phasers offline.'
+    if (player.systems[ShipSystem.Lasers] < 10) return 'Lasers offline.'
     if (player.phaserTemp > 1200) return 'Phasers overheated. Wait to cool.'
 
     const enemies = this.state.quadrant.enemies
@@ -227,9 +227,9 @@ export class Game {
 
   cmdTorpedo(targets: Array<{ x: number; y: number }>): string {
     const { player } = this.state
-    if (player.systems[ShipSystem.PhoTorpTubes] < 34) return 'All torpedo tubes offline.'
+    if (player.systems[ShipSystem.EnTorpTubes] < 34) return 'All torpedo tubes offline.'
 
-    const tubeRepair = player.systems[ShipSystem.PhoTorpTubes]
+    const tubeRepair = player.systems[ShipSystem.EnTorpTubes]
     const activeTubes = tubeRepair >= 100 ? 3 : tubeRepair >= 67 ? 2 : 1
     const canFire = Math.min(activeTubes, player.phoTorps, targets.length)
     if (canFire <= 0) return 'No photon torpedoes remaining.'
@@ -282,7 +282,7 @@ export class Game {
 
   cmdShieldsUp(): string {
     const { player } = this.state
-    if (player.systems[ShipSystem.Shields] < 10) return 'Shield generator offline.'
+    if (this.state.player.systems[ShipSystem.Shields] < 10) return 'Shield generator offline.'
     if (player.shields > 0) return 'Shields already up.'
     const xfer = Math.min(player.maxShields, player.energy)
     player.shields = xfer
@@ -301,7 +301,7 @@ export class Game {
 
   cmdMaxShields(): string {
     const { player } = this.state
-    if (player.systems[ShipSystem.Shields] < 10) return 'Shield generator offline.'
+    if (this.state.player.systems[ShipSystem.Shields] < 10) return 'Shield generator offline.'
     const total = player.energy + player.shields
     const newShields = Math.min(player.maxShields, total)
     player.energy = total - newShields
@@ -311,7 +311,7 @@ export class Game {
   }
 
   cmdSetWarp(speed: number): string {
-    if (speed < 0.1 || speed > MAX_WARP) return `Warp must be 0.1–${MAX_WARP}.`
+    if (speed < 0.1 || speed > MAX_WARP) return `Warp must be 0.1-${MAX_WARP}.`
     const maxWarp = 1 + 0.09 * this.state.player.systems[ShipSystem.WarpEngines]
     if (speed > maxWarp) return `Engine damage limits warp to ${maxWarp.toFixed(1)}.`
     this.state.player.warp = speed
@@ -418,7 +418,7 @@ export class Game {
 
   cmdTransferEnergy(toShields: number): string {
     const { player } = this.state
-    if (player.systems[ShipSystem.Shields] < 10) return 'Shield generator offline.'
+    if (this.state.player.systems[ShipSystem.Shields] < 10) return 'Shield generator offline.'
     const total = player.energy + player.shields
     if (toShields > player.maxShields) toShields = player.maxShields
     if (toShields > total) return 'Insufficient total energy.'
@@ -574,39 +574,52 @@ export class Game {
   // ── Hail ──────────────────────────────────────────────────────────────────
 
   cmdHail(): string {
-    const { quadrant, phase } = this.state
-    if (quadrant.baseType === BaseType.None) return 'No base in this quadrant to hail.'
+    const { position, galaxy } = this.state
 
+    // Find nearest base across all scanned quadrants
+    let nearestBase: { qx: number; qy: number; type: BaseType } | null = null
+    let nearestDist = Infinity
+    for (let qy = 0; qy < GALAXY_SIZE; qy++) {
+      for (let qx = 0; qx < GALAXY_SIZE; qx++) {
+        const cell = galaxy[qy][qx]
+        if (cell.baseType !== BaseType.None) {
+          const dist = Math.sqrt(
+            Math.pow(qx - position.quad.x, 2) + Math.pow(qy - position.quad.y, 2)
+          )
+          if (dist < nearestDist) {
+            nearestDist = dist
+            nearestBase = { qx, qy, type: cell.baseType }
+          }
+        }
+      }
+    }
+
+    if (!nearestBase) return 'COMMUNICATIONS: No response on hailing frequencies. No StarBase in range.'
+
+    const { qx, qy, type } = nearestBase
     const baseNames: Record<number, string> = {
-      [BaseType.StarBase]: 'Starbase',
+      [BaseType.StarBase]: 'StarBase',
       [BaseType.Research]: 'Research Station',
       [BaseType.Supply]:   'Supply Depot',
     }
-    const baseName = baseNames[quadrant.baseType] ?? 'Base'
+    const baseName = baseNames[type] ?? 'StarBase'
+    const quadStr = `${qy + 1}-${qx + 1}`
 
-    const docked = phase === GamePhase.Docked
-    const msgs = docked ? [
-      `${baseName} to ship: Welcome. All facilities at your disposal.`,
-      `${baseName} Control: Resupply operations complete.`,
-      `${baseName} Ops: Safe travels, Commander.`,
-    ] : [
-      `${baseName} to ship: We read you. Come in for docking.`,
-      `${baseName} Control: Approach on bearing 227. Docking bay open.`,
-      `${baseName} Ops: ${this.state.totalEnemies} enemy vessels still active in sector.`,
-      `${baseName}: We show ${this.state.quadrant.enemies.length} hostiles in your quadrant. Good luck.`,
-    ]
-
-    const line = msgs[Math.floor(Math.random() * msgs.length)]
+    const line = `Hailing frequencies open... ${baseName} in ${quadStr} responds.`
     this.addLog(`COMMUNICATIONS: ${line}`)
-    return line
+    return `COMMUNICATIONS: ${line}`
   }
 
   // ── Self-Destruct ──────────────────────────────────────────────────────────
 
-  cmdSelf(password: string): string {
-    if (password !== this.state.selfDestructPassword) {
-      return 'DESTRUCT SEQUENCE ABORTED — incorrect password.'
+  // Step 1: set pending flag and return confirmation prompt
+  // Step 2: called with confirmed=true to execute
+  cmdSelf(confirmed = false): string {
+    if (!confirmed) {
+      this.state.pendingSelfDestruct = true
+      return 'Captain, this is a desperate measure.\nAre you sure you want to do this? (Type Y to confirm)'
     }
+    this.state.pendingSelfDestruct = false
     this.state.phase = GamePhase.GameOver
     this.addLog('SELF-DESTRUCT sequence initiated. Ship destroyed.')
     return 'DESTRUCT SEQUENCE INITIATED.\nExplosion in 30 seconds.\nAll hands abandon ship.\n*** SHIP DESTROYED ***'

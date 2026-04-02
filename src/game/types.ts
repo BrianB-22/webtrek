@@ -21,18 +21,18 @@ export enum CellType {
 }
 
 export enum ShipSystem {
-  MAMConverter  = 'M/A-M Converter',
-  Shields       = 'Shields',
-  WarpEngines   = 'Warp Engines',
-  ImpulseEngines = 'Impulse Engines',
-  Phasers       = 'Phasers',
-  PhoTorpTubes  = 'PhoTorp Tubes',
-  SRScanner     = 'S.R. Scanner',
-  LRScanner     = 'L.R. Scanner',
-  Computer      = 'Computer',
-  LifeSupport   = 'Life Support',
-  Transporter   = 'Transporter',
-  Shuttlecraft  = 'Shuttlecraft',
+  EnergyConverter = 'EnergyConverter',
+  Shields         = 'Shields',
+  LifeSupport     = 'Life Support',
+  Lasers          = 'Lasers',
+  EnTorpTubes     = 'EnTorp Tubes',
+  WarpEngines     = 'Warp Engines',
+  ImpulseEngine   = 'Impulse Engine',
+  SRScanner       = 'S.R. Scanner',
+  LRScanner       = 'L.R. Scanner',
+  Computer        = 'Computer',
+  Transporter     = 'Transporter',
+  Shuttlecraft    = 'Shuttlecraft',
 }
 
 export type SystemsStatus = Record<ShipSystem, number>  // 0-100 integrity %
@@ -100,6 +100,7 @@ export interface GameState {
   difficulty: number  // 1-5
   selfDestructPassword: string
   commanderName: string
+  pendingSelfDestruct?: boolean
 }
 
 export interface LogEntry {
