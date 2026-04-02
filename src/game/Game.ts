@@ -271,7 +271,7 @@ export class Game {
           this.destroyEnemy(enemy.sect)
           return `Torpedo direct hit at ${cx + 1},${cy + 1}! Enemy destroyed.`
         }
-      } else if (cell === CellType.Star || cell === CellType.StarBase || cell === CellType.ResearchStation || cell === CellType.SupplyDepot) {
+      } else if (cell === CellType.Star || cell === CellType.Planet || cell === CellType.StarBase || cell === CellType.ResearchStation || cell === CellType.SupplyDepot) {
         return `Torpedo impacted object at ${cx + 1},${cy + 1}.`
       }
     }
